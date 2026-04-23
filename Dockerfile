@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y hdparm sqlite3 curl procps && rm -rf /v
 RUN mkdir /data
 COPY --from=frontend-builder /app/dist ./dist
 COPY --from=backend-builder /app/main .
+COPY config.json .
 
 EXPOSE 48070
 CMD ["./main"]

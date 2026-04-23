@@ -8,9 +8,8 @@ services:
     volumes:
       - hdd-monitor-data:/data
       - /dev/kmsg:/dev/kmsg
-    devices:
-      - "/dev/sda:/dev/sda"
-      - "/dev/sdb:/dev/sdb"
+      - /dev:/dev
+      - ./config.json:/app/config.json
     restart: unless-stopped
 
 volumes:

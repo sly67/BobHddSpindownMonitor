@@ -16,6 +16,18 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type DriveConfig struct {
+	Name        string `json:"name"`
+	Device      string `json:"device"`
+	Description string `json:"description"`
+}
+
+type Config struct {
+	Drives                 []DriveConfig `json:"drives"`
+	SpindownTimeoutSeconds int           `json:"spindown_timeout_seconds"`
+	PollingIntervalSeconds int           `json:"polling_interval_seconds"`
+}
+
 type Event struct {
 	ID        int64     `json:"id"`
 	Timestamp time.Time `json:"timestamp"`
@@ -31,28 +43,40 @@ type DriveStats struct {
 	HealthScore     string  `json:"health_score"`
 }
 
-type StatsResponse struct {
-	Pulsar DriveStats `json:"pulsar"`
-	Quasar DriveStats `json:"quasar"`
-}
+type StatsResponse map[string]DriveStats
 
 type Status struct {
-	Pulsar          string  `json:"pulsar"`
-	Quasar          string  `json:"quasar"`
-	PulsarIOPS      float64 `json:"pulsar_iops"`
-	QuasarIOPS      float64 `json:"quasar_iops"`
-	PulsarIdleTimer int     `json:"pulsar_idle_timer"` // Seconds remaining
-	QuasarIdleTimer int     `json:"quasar_idle_timer"` // Seconds remaining
+	States     map[string]string  `json:"states"`
+	IOPS       map[string]float64 `json:"iops"`
+	IdleTimers map[string]int     `json:"idle_timers"`
 }
 
 var (
-	db              *sql.DB
-	lastIO          = make(map[string]uint64)
-	lastActivity    = make(map[string]time.Time)
-	currentIOPS     = make(map[string]float64)
-	mu              sync.Mutex
-	spindownTimeout = 1800 // 30 minutes
+	db           *sql.DB
+	appConfig    Config
+	lastIO       = make(map[string]uint64)
+	lastActivity = make(map[string]time.Time)
+	currentIOPS  = make(map[string]float64)
+	mu           sync.Mutex
 )
+
+func loadConfig() {
+	file, err := os.ReadFile("config.json")
+	if err != nil {
+		// Fallback defaults
+		appConfig = Config{
+			Drives: []DriveConfig{
+				{Name: "Quasar", Device: "/dev/sda", Description: "Backup Storage"},
+				{Name: "Pulsar", Device: "/dev/sdb", Description: "Media Storage"},
+			},
+			SpindownTimeoutSeconds: 1800,
+			PollingIntervalSeconds: 30,
+		}
+		log.Printf("Using default config: %v", err)
+		return
+	}
+	json.Unmarshal(file, &appConfig)
+}
 
 func initDB() {
 	var err error
@@ -145,7 +169,17 @@ func monitorIO() {
 				continue
 			}
 			devName := fields[2]
-			if devName == "sda" || devName == "sdb" {
+			
+			// Check if this device is in our config
+			isMonitored := false
+			for _, d := range appConfig.Drives {
+				if strings.HasSuffix(d.Device, devName) {
+					isMonitored = true
+					break
+				}
+			}
+
+			if isMonitored {
 				reads, _ := strconv.ParseUint(fields[3], 10, 64)
 				writes, _ := strconv.ParseUint(fields[7], 10, 64)
 				total := reads + writes
@@ -165,33 +199,31 @@ func monitorIO() {
 }
 
 func pollDrives() {
-	ticker := time.NewTicker(15 * time.Second)
+	interval := time.Duration(appConfig.PollingIntervalSeconds) * time.Second
+	ticker := time.NewTicker(interval)
 	states := make(map[string]string)
-	states["/dev/sda"] = getDriveState("/dev/sda")
-	states["/dev/sdb"] = getDriveState("/dev/sdb")
+	
+	for _, d := range appConfig.Drives {
+		states[d.Device] = getDriveState(d.Device)
+	}
 
 	for range ticker.C {
-		for _, dev := range []string{"/dev/sda", "/dev/sdb"} {
-			currentState := getDriveState(dev)
-			if currentState != states[dev] && currentState != "unknown" {
-				driveName := "Quasar"
-				if dev == "/dev/sdb" {
-					driveName = "Pulsar"
-				}
-
+		for _, d := range appConfig.Drives {
+			currentState := getDriveState(d.Device)
+			if currentState != states[d.Device] && currentState != "unknown" {
 				event := "Spin-up"
 				culprit := ""
 				if currentState == "standby" {
 					event = "Spin-down"
 				} else {
-					culprit = getCulprit(dev)
+					culprit = getCulprit(d.Device)
 					mu.Lock()
-					lastActivity[strings.TrimPrefix(dev, "/dev/")] = time.Now()
+					lastActivity[strings.TrimPrefix(d.Device, "/dev/")] = time.Now()
 					mu.Unlock()
 				}
 
-				db.Exec("INSERT INTO events (drive, event, culprit) VALUES (?, ?, ?)", driveName, event, culprit)
-				states[dev] = currentState
+				db.Exec("INSERT INTO events (drive, event, culprit) VALUES (?, ?, ?)", d.Name, event, culprit)
+				states[d.Device] = currentState
 			}
 		}
 	}
@@ -219,10 +251,15 @@ func calculateDriveStats(driveName string) DriveStats {
 	return stats
 }
 
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(appConfig)
+}
+
 func handleStats(w http.ResponseWriter, r *http.Request) {
-	resp := StatsResponse{
-		Quasar: calculateDriveStats("Quasar"),
-		Pulsar: calculateDriveStats("Pulsar"),
+	resp := make(StatsResponse)
+	for _, d := range appConfig.Drives {
+		resp[d.Name] = calculateDriveStats(d.Name)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -232,31 +269,27 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	qState := getDriveState("/dev/sda")
-	pState := getDriveState("/dev/sdb")
-
-	qTimer := 0
-	if qState == "active" {
-		elapsed := time.Since(lastActivity["sda"]).Seconds()
-		qTimer = int(float64(spindownTimeout) - elapsed)
-		if qTimer < 0 { qTimer = 0 }
-	}
-
-	pTimer := 0
-	if pState == "active" {
-		elapsed := time.Since(lastActivity["sdb"]).Seconds()
-		pTimer = int(float64(spindownTimeout) - elapsed)
-		if pTimer < 0 { pTimer = 0 }
-	}
-
 	status := Status{
-		Quasar:          qState,
-		Pulsar:          pState,
-		QuasarIOPS:      currentIOPS["sda"],
-		PulsarIOPS:      currentIOPS["sdb"],
-		QuasarIdleTimer: qTimer,
-		PulsarIdleTimer: pTimer,
+		States:     make(map[string]string),
+		IOPS:       make(map[string]float64),
+		IdleTimers: make(map[string]int),
 	}
+
+	for _, d := range appConfig.Drives {
+		devBase := strings.TrimPrefix(d.Device, "/dev/")
+		state := getDriveState(d.Device)
+		status.States[d.Name] = state
+		status.IOPS[d.Name] = currentIOPS[devBase]
+
+		timer := 0
+		if state == "active" {
+			elapsed := time.Since(lastActivity[devBase]).Seconds()
+			timer = int(float64(appConfig.SpindownTimeoutSeconds) - elapsed)
+			if timer < 0 { timer = 0 }
+		}
+		status.IdleTimers[d.Name] = timer
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 }
@@ -281,14 +314,19 @@ func handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	loadConfig()
 	initDB()
-	lastActivity["sda"] = time.Now()
-	lastActivity["sdb"] = time.Now()
+	
+	for _, d := range appConfig.Drives {
+		devBase := strings.TrimPrefix(d.Device, "/dev/")
+		lastActivity[devBase] = time.Now()
+	}
 	
 	go pollDrives()
 	go purgeOldData()
 	go monitorIO()
 
+	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/status", handleStatus)
 	http.HandleFunc("/api/events", handleEvents)
 	http.HandleFunc("/api/stats", handleStats)

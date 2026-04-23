@@ -2,16 +2,23 @@
   import { onMount } from 'svelte';
   import { HardDrive, Activity, Moon, List, Search, BarChart3, ShieldCheck, ShieldAlert, ShieldX, Timer, Gauge } from 'lucide-svelte';
 
+  let config = { drives: [] };
   let status = { 
-    pulsar: 'unknown', quasar: 'unknown', 
-    pulsar_iops: 0, quasar_iops: 0,
-    pulsar_idle_timer: 0, quasar_idle_timer: 0
+    states: {}, 
+    iops: {},
+    idle_timers: {}
   };
   let events = [];
-  let stats = {
-    pulsar: { total_spin_ups: 0, total_spin_downs: 0, avg_cycles_per_day: 0, health_score: 'Good' },
-    quasar: { total_spin_ups: 0, total_spin_downs: 0, avg_cycles_per_day: 0, health_score: 'Good' }
-  };
+  let stats = {};
+
+  async function fetchConfig() {
+    try {
+      const res = await fetch('/api/config');
+      config = await res.json();
+    } catch (e) {
+      console.error('Failed to fetch config', e);
+    }
+  }
 
   async function fetchData() {
     try {
@@ -29,7 +36,8 @@
     }
   }
 
-  onMount(() => {
+  onMount(async () => {
+    await fetchConfig();
     fetchData();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
@@ -47,6 +55,7 @@
   }
 
   function getRecommendation(driveStats) {
+    if (!driveStats) return 'Loading health data...';
     if (driveStats.health_score === 'Critical') {
       return 'CRITICAL: High wear detected. Increase spindown timeout (hdparm -S) immediately to prevent premature failure.';
     } else if (driveStats.health_score === 'Warning') {
@@ -60,111 +69,66 @@
 <main class="container">
   <header>
     <h1>HDD Spin Monitor</h1>
-    <p>Monitoring Pulsar & Quasar power states</p>
+    <p>Monitoring drive power states</p>
   </header>
 
   <div class="status-grid">
-    <!-- Pulsar Card -->
-    <div class="card" class:active={status.pulsar === 'active'}>
-      <div class="card-header">
-        <HardDrive size={24} />
-        <h2>Pulsar</h2>
-        <div class="health-badge" class:warning={stats.pulsar.health_score === 'Warning'} class:critical={stats.pulsar.health_score === 'Critical'}>
-          {#if stats.pulsar.health_score === 'Good'}<ShieldCheck size={16}/>{:else if stats.pulsar.health_score === 'Warning'}<ShieldAlert size={16}/>{:else}<ShieldX size={16}/>{/if}
-          <span>{stats.pulsar.health_score}</span>
-        </div>
-      </div>
-      
-      <div class="state-container">
-        <div class="state">
-          {#if status.pulsar === 'active'}
-            <Activity color="#22c55e" /> <span>Active / Idle</span>
-          {:else if status.pulsar === 'standby'}
-            <Moon color="#3b82f6" /> <span>Standby</span>
-          {:else}
-            <span>Loading...</span>
-          {/if}
-        </div>
+    {#each config.drives as drive}
+      {@const driveStatus = status.states[drive.name] || 'unknown'}
+      {@const driveStats = stats[drive.name] || { total_spin_ups: 0, avg_cycles_per_day: 0, health_score: 'Good' }}
+      {@const driveIOPS = status.iops[drive.name] || 0}
+      {@const driveTimer = status.idle_timers[drive.name] || 0}
 
-        <div class="live-metrics">
-          <div class="metric">
-            <Gauge size={16} />
-            <span>{status.pulsar_iops.toFixed(1)} IOPS</span>
+      <div class="card" class:active={driveStatus === 'active'}>
+        <div class="card-header">
+          <HardDrive size={24} />
+          <h2>{drive.name}</h2>
+          <div class="health-badge" class:warning={driveStats.health_score === 'Warning'} class:critical={driveStats.health_score === 'Critical'}>
+            {#if driveStats.health_score === 'Good'}<ShieldCheck size={16}/>{:else if driveStats.health_score === 'Warning'}<ShieldAlert size={16}/>{:else}<ShieldX size={16}/>{/if}
+            <span>{driveStats.health_score}</span>
           </div>
-          {#if status.pulsar === 'active'}
-            <div class="metric timer">
-              <Timer size={16} />
-              <span>Idle in {formatTimer(status.pulsar_idle_timer)}</span>
-            </div>
-          {/if}
         </div>
-      </div>
-
-      <div class="stats-box">
-        <div class="stat-item">
-          <span class="label">Total Spin-ups:</span>
-          <span class="val">{stats.pulsar.total_spin_ups}</span>
-        </div>
-        <div class="stat-item">
-          <span class="label">Avg Cycles/Day:</span>
-          <span class="val">{stats.pulsar.avg_cycles_per_day.toFixed(1)}</span>
-        </div>
-      </div>
-
-      <p class="recommendation">{getRecommendation(stats.pulsar)}</p>
-      <p class="description">Media Storage (/dev/sdb)</p>
-    </div>
-
-    <!-- Quasar Card -->
-    <div class="card" class:active={status.quasar === 'active'}>
-      <div class="card-header">
-        <HardDrive size={24} />
-        <h2>Quasar</h2>
-        <div class="health-badge" class:warning={stats.quasar.health_score === 'Warning'} class:critical={stats.quasar.health_score === 'Critical'}>
-          {#if stats.quasar.health_score === 'Good'}<ShieldCheck size={16}/>{:else if stats.quasar.health_score === 'Warning'}<ShieldAlert size={16}/>{:else}<ShieldX size={16}/>{/if}
-          <span>{stats.quasar.health_score}</span>
-        </div>
-      </div>
-      
-      <div class="state-container">
-        <div class="state">
-          {#if status.quasar === 'active'}
-            <Activity color="#22c55e" /> <span>Active / Idle</span>
-          {:else if status.quasar === 'standby'}
-            <Moon color="#3b82f6" /> <span>Standby</span>
-          {:else}
-            <span>Loading...</span>
-          {/if}
-        </div>
-
-        <div class="live-metrics">
-          <div class="metric">
-            <Gauge size={16} />
-            <span>{status.quasar_iops.toFixed(1)} IOPS</span>
+        
+        <div class="state-container">
+          <div class="state">
+            {#if driveStatus === 'active'}
+              <Activity color="#22c55e" /> <span>Active / Idle</span>
+            {:else if driveStatus === 'standby'}
+              <Moon color="#3b82f6" /> <span>Standby</span>
+            {:else}
+              <span>Loading...</span>
+            {/if}
           </div>
-          {#if status.quasar === 'active'}
-            <div class="metric timer">
-              <Timer size={16} />
-              <span>Idle in {formatTimer(status.quasar_idle_timer)}</span>
+
+          <div class="live-metrics">
+            <div class="metric">
+              <Gauge size={16} />
+              <span>{driveIOPS.toFixed(1)} IOPS</span>
             </div>
-          {/if}
+            {#if driveStatus === 'active'}
+              <div class="metric timer">
+                <Timer size={16} />
+                <span>Idle in {formatTimer(driveTimer)}</span>
+              </div>
+            {/if}
+          </div>
         </div>
-      </div>
 
-      <div class="stats-box">
-        <div class="stat-item">
-          <span class="label">Total Spin-ups:</span>
-          <span class="val">{stats.quasar.total_spin_ups}</span>
+        <div class="stats-box">
+          <div class="stat-item">
+            <span class="label">Total Spin-ups:</span>
+            <span class="val">{driveStats.total_spin_ups}</span>
+          </div>
+          <div class="stat-item">
+            <span class="label">Avg Cycles/Day:</span>
+            <span class="val">{driveStats.avg_cycles_per_day.toFixed(1)}</span>
+          </div>
         </div>
-        <div class="stat-item">
-          <span class="label">Avg Cycles/Day:</span>
-          <span class="val">{stats.quasar.avg_cycles_per_day.toFixed(1)}</span>
-        </div>
-      </div>
 
-      <p class="recommendation">{getRecommendation(stats.quasar)}</p>
-      <p class="description">Backup Storage (/dev/sda)</p>
-    </div>
+        <p class="recommendation">{getRecommendation(driveStats)}</p>
+        <p class="description">{drive.description} ({drive.device})</p>
+      </div>
+    {/each}
   </div>
 
   <section class="events-section">

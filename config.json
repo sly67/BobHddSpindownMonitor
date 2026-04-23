@@ -1,0 +1,16 @@
+{
+  "drives": [
+    {
+      "name": "Quasar",
+      "device": "/dev/sda",
+      "description": "Backup Storage"
+    },
+    {
+      "name": "Pulsar",
+      "device": "/dev/sdb",
+      "description": "Media Storage"
+    }
+  ],
+  "spindown_timeout_seconds": 1800,
+  "polling_interval_seconds": 30
+}
