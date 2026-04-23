@@ -1,0 +1,17 @@
+services:
+  hdd-monitor:
+    build: .
+    container_name: hdd-monitor
+    privileged: true
+    ports:
+      - "48070:48070"
+    volumes:
+      - hdd-monitor-data:/data
+      - /dev/kmsg:/dev/kmsg
+    devices:
+      - "/dev/sda:/dev/sda"
+      - "/dev/sdb:/dev/sdb"
+    restart: unless-stopped
+
+volumes:
+  hdd-monitor-data:

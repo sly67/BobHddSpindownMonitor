@@ -1,0 +1,20 @@
+# Go
+backend/hdd-monitor
+backend/go.sum
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+
+# Application Data
+*.db
+*.db-journal
+
+# Docker
+.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db
