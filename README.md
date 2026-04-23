@@ -1,4 +1,4 @@
-# HDD Spin State Monitor
+# Bob HDD Spindown Monitor
 
 A lightweight, Dockerized tool for monitoring the power states of hard drives, tracking IOPS, and identifying the processes that wake them up. Designed for Debian-based systems.
 

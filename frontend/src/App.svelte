@@ -68,7 +68,7 @@
 
 <main class="container">
   <header>
-    <h1>HDD Spin Monitor</h1>
+    <h1>Bob HDD Spindown Monitor</h1>
     <p>Monitoring drive power states</p>
   </header>
 
